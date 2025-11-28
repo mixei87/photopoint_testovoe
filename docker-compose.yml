@@ -1,0 +1,102 @@
+services:
+  web:
+    container_name: photopoint_web
+    build: .
+    command: bash -c "python manage.py runserver ${DJANGO_HOST}:${WEB_INTERNAL_PORT}"
+    ports:
+      - "${WEB_PORT}:${WEB_INTERNAL_PORT}"
+    volumes:
+      - .:/app
+    working_dir: /app
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://${DJANGO_HOST}:${WEB_INTERNAL_PORT}/health/" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  celery:
+    container_name: photopoint_celery
+    build: .
+    command: bash -c "cd /app && celery -A config worker --loglevel=info"
+    working_dir: /app
+    volumes:
+      - .:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "celery -A config inspect ping -d celery@$$HOSTNAME || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  redis:
+    container_name: photopoint_redis
+    image: redis:7.2-alpine
+    command: redis-server --save 60 1 --loglevel warning --port ${REDIS_INTERNAL_PORT} --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "${REDIS_PORT}:${REDIS_INTERNAL_PORT}"
+    volumes:
+      - photopoint_redis:/data
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  db:
+    container_name: photopoint_db
+    image: postgres:17.1-alpine3.19
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: --data-checksums
+    ports:
+      - "${DB_PORT}:${DB_INTERNAL_PORT}"
+    volumes:
+      - photopoint_postgres:/var/lib/postgresql/data/
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER} -h ${DB_HOST}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    container_name: photopoint_pgadmin
+    image: dpage/pgadmin4:8.5
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "${PGADMIN_PORT}:${PGADMIN_INTERNAL_PORT}"
+    depends_on:
+      - db
+    restart: unless-stopped
+    volumes:
+      - photopoint_pgadmin:/var/lib/pgadmin
+
+volumes:
+  photopoint_postgres:
+  photopoint_redis:
+  photopoint_pgadmin:
+
+networks:
+  default:
+    driver: bridge
