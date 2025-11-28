@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Отправка уведомлений</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background:#f7f7f8; }
+    .container { max-width: 880px; margin: 40px auto; background:#fff; padding:24px; border-radius:12px; box-shadow:0 6px 20px rgba(0,0,0,.06); }
+    h1 { margin: 0 0 18px; font-size: 22px; }
+    .row { display:flex; gap:20px; }
+    .col { flex:1; }
+    label { display:block; font-size:13px; color:#555; margin: 0 0 6px; }
+    select, textarea { width:100%; padding:10px 12px; border:1px solid #dcdcdc; border-radius:10px; font:inherit; }
+    textarea { min-height: 160px; resize: vertical; }
+    .actions { margin-top: 16px; display:flex; gap:12px; align-items:center; }
+    .btn { background:#111827; color:#fff; border:none; padding:10px 16px; border-radius:10px; cursor:pointer; }
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
+    .note { font-size:12px; color:#666; }
+    .msg { padding:10px 12px; border-radius:10px; margin: 0 0 14px; }
+    .msg.success { background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0; }
+    .msg.error { background:#fef2f2; color:#991b1b; border:1px solid #fecaca; }
+    .list { margin: 10px 0 0; font-size:12px; color:#666; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Отправка уведомлений</h1>
+
+    {% if messages %}
+      {% for message in messages %}
+        <div class="msg {% if message.tags %}{{ message.tags }}{% endif %}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+
+    <form method="post">
+      {% csrf_token %}
+      <div class="row">
+        <div class="col">
+          <label for="users">Получатели (можно выбрать несколько)</label>
+          <select id="users" name="users" multiple size="10" required>
+            {% for u in users %}
+              <option value="{{ u.id }}">{{ u.username }}{% if u.email %} • {{ u.email }}{% endif %}</option>
+            {% empty %}
+              <option disabled>Нет пользователей</option>
+            {% endfor %}
+          </select>
+          <div class="note list">Удерживайте Ctrl/Command для множественного выбора.</div>
+        </div>
+        <div class="col">
+          <label for="message">Сообщение</label>
+          <textarea id="message" name="message" placeholder="Введите текст уведомления" required></textarea>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn" type="submit">Отправить</button>
+        <span class="note">Будут созданы записи уведомлений для выбранных пользователей.</span>
+      </div>
+    </form>
+  </div>
+</body>
+</html>
