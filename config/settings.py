@@ -7,29 +7,30 @@ load_dotenv()
 # Базовые настройки
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv("SECRET_KEY")
-DEBUG = os.getenv("DEBUG", "True") == "True"
+DEBUG = os.getenv("DEBUG").lower() == "true"
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS").split(",")
 
 # Приложения
 INSTALLED_APPS = [
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
-    'users',
-    'notifications',
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "rest_framework",
+    "users",
+    "notifications",
 ]
 
 # Промежуточное ПО
 MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
 ]
 
 # URL-конфигурация
@@ -96,18 +97,6 @@ USE_TZ = True
 # Пользовательская модель пользователя
 AUTH_USER_MODEL = "users.User"
 
-# Настройки Celery
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND")
-
-# Парсим CELERY_BROKER_TRANSPORT_OPTIONS из строки JSON в словарь
-import json
-broker_transport_options = os.getenv("CELERY_BROKER_TRANSPORT_OPTIONS", '{}')
-try:
-    CELERY_BROKER_TRANSPORT_OPTIONS = json.loads(broker_transport_options)
-except json.JSONDecodeError:
-    CELERY_BROKER_TRANSPORT_OPTIONS = {}
-
 # Настройки для логирования
 LOGGING = {
     "version": 1,
@@ -117,27 +106,61 @@ LOGGING = {
             "class": "logging.StreamHandler",
         },
     },
+    # Базовый логгер по умолчанию
     "root": {
         "handlers": ["console"],
         "level": "INFO",
     },
+    "loggers": {
+        # Логгер HTTP-запросов Django (404/500 и т.п.).
+        # Поднимаем уровень до ERROR, чтобы 404 (WARNING) не дублировались в логах.
+        "django.request": {
+            "handlers": ["console"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+        # Логгер встроенного dev-сервера (строка вида "GET /... 404").
+        # Оставляем только один вывод от него, не пропуская вверх к root.
+        "django.server": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        # Наши сервисы уведомлений
+        "notifications.services.notification_service": {
+            "handlers": ["console"],
+            "level": "DEBUG",
+            "propagate": False,
+        },
+        "notifications.services.providers.telegram_provider": {
+            "handlers": ["console"],
+            "level": "DEBUG",
+            "propagate": False,
+        },
+    },
 }
 
 # Отключаем обработку статических файлов
-STATIC_URL = '/static/'
+STATIC_URL = "/static/"
 
-# Настройки Email
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = os.getenv("EMAIL_HOST")
-EMAIL_PORT = int(os.getenv("EMAIL_PORT"))
-EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS") == "True"
-EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
-EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
+# Настройки Email (Brevo)
+EMAIL_API_KEY = os.getenv("EMAIL_API_KEY")
+EMAIL_SENDER_EMAIL = os.getenv("EMAIL_SENDER_EMAIL")
+EMAIL_SENDER_NAME = os.getenv("EMAIL_SENDER_NAME")
 
 # Настройки Telegram
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Настройки Twilio (SMS)
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
+# Настройки SMS (Exolve)
+SMS_AUTH_TOKEN = os.getenv("SMS_AUTH_TOKEN")
+SMS_PHONE_NUMBER = os.getenv("SMS_PHONE_NUMBER")
+
+# Глобальные настройки DRF.
+REST_FRAMEWORK = {
+    # Оставляем стандартные рендереры DRF, включая Browsable API, чтобы
+    # /api/ и другие endpoints отображались в удобном HTML-интерфейсе.
+    "DEFAULT_RENDERER_CLASSES": [
+        "rest_framework.renderers.JSONRenderer",
+        "rest_framework.renderers.BrowsableAPIRenderer",
+    ],
+}

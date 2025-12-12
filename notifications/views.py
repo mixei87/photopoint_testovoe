@@ -1,155 +1,339 @@
-"""
-Представления для приложения уведомлений.
-"""
+"""Представления для приложения уведомлений."""
+
 import logging
-from django.http import HttpResponse
-from django.shortcuts import render, redirect
-from django.views import View
+import time
+import threading
+
 from django.contrib import messages
-from rest_framework import viewsets, status
+from django.shortcuts import redirect, render
+from django.views import View
+from django.views.generic import TemplateView
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from .models import Notification
+from rest_framework.views import APIView
+
+from .models import Notification, NotificationStatus, NotificationType
+from .serializers import NotificationSerializer, SendNotificationSerializer
+from .services import NotificationService
+
 
 class HealthCheckView(APIView):
-    """
-    Простая вьюха для проверки работоспособности сервиса
-    """
-    def get(self, request, *args, **kwargs):
-        return Response({
-            'status': 'ok',
-            'service': 'Notification Service',
-            'version': '1.0.0'
-        })
+    """Простая вьюха для проверки работоспособности сервиса."""
 
-class SimpleView(View):
-    """
-    Простая HTML-страница для проверки работы сервера
-    """
-    def get(self, request, *args, **kwargs):
-        html = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Notification Service</title>
-            <style>
-                body {
-                    font-family: Arial, sans-serif;
-                    line-height: 1.6;
-                    margin: 0;
-                    padding: 20px;
-                    background-color: #f5f5f5;
-                }
-                .container {
-                    max-width: 800px;
-                    margin: 0 auto;
-                    background: white;
-                    padding: 20px;
-                    border-radius: 5px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                }
-                h1 {
-                    color: #333;
-                    border-bottom: 1px solid #eee;
-                    padding-bottom: 10px;
-                }
-                .status {
-                    color: #4CAF50;
-                    font-weight: bold;
-                }
-                .info {
-                    margin-top: 20px;
-                    padding: 15px;
-                    background-color: #e7f3fe;
-                    border-left: 6px solid #2196F3;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>Сервис уведомлений</h1>
-                <div class="status">Статус: <span style="color: green;">Работает</span></div>
-                
-                <div class="info">
-                    <h3>Доступные эндпоинты:</h3>
-                    <ul>
-                        <li><strong>Админ-панель:</strong> <a href="/admin/">/admin/</a></li>
-                    </ul>
-                </div>
-                
-                <div style="margin-top: 20px; font-size: 0.9em; color: #666;">
-                    <p>Версия: 1.0.0</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        return HttpResponse(html)
+    def get(self, request, *args, **kwargs):  # noqa
+        return Response(
+            {"status": "ok", "service": "Notification Service", "version": "1.0.0"}
+        )
+
+
+class SimpleView(TemplateView):
+    """Простая HTML-страница для проверки работы сервера."""
+
+    template_name = "notifications/simple.html"
+
 
 class NotificationSendView(View):
     """Главная страница с формой отправки уведомлений нескольким пользователям."""
-    template_name = 'notifications/send.html'
 
-    def get(self, request, *args, **kwargs):
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        users = User.objects.all().order_by('username')
-        return render(request, self.template_name, {
-            'users': users,
-        })
+    template_name = "notifications/send.html"
 
-    def post(self, request, *args, **kwargs):
+    def get(self, request, *args, **kwargs):  # noqa
         from django.contrib.auth import get_user_model
+
         User = get_user_model()
-        user_ids = request.POST.getlist('users')
-        message_text = request.POST.get('message', '').strip()
+        users_qs = User.objects.filter(is_staff=False).order_by("username")
+
+        # Берём из сессии последних выбранных пользователей для отображения статусов
+        last_ids = request.session.get("last_notification_user_ids")
+        started_at_iso = request.session.get("last_notification_started_at")
+        send_statuses: list[dict] | None = None
+
+        if last_ids and started_at_iso:
+            from django.utils.dateparse import parse_datetime
+
+            started_at = parse_datetime(started_at_iso)
+            if started_at is None:
+                started_at = None
+
+            selected_users = users_qs.filter(id__in=last_ids)
+
+            # Формируем статусы отправки только для выбранных пользователей
+            send_statuses = []
+            notification_types = [
+                NotificationType.TELEGRAM,
+                NotificationType.EMAIL,
+                NotificationType.SMS,
+            ]
+
+            any_pending = False
+
+            for user in selected_users:
+                user_item: dict = {
+                    "user_label": getattr(user, "username", str(user)),
+                    "statuses": [],
+                }
+
+                for nt in notification_types:
+                    qs = Notification.objects.filter(user=user, notification_type=nt)
+                    if started_at is not None:
+                        qs = qs.filter(created_at__gte=started_at)
+                    last_notif = qs.order_by("-created_at").first()
+
+                    if not last_notif:
+                        status_key = "not_sent"
+                        status_label = "Не отправлялось"
+                    else:
+                        if last_notif.status == NotificationStatus.PENDING:
+                            status_key = "pending"
+                            status_label = "В процессе"
+                            any_pending = True
+                        elif last_notif.status in (
+                            NotificationStatus.SENT,
+                            NotificationStatus.DELIVERED,
+                        ):
+                            status_key = "success"
+                            status_label = "Успешно отправлено"
+                        elif last_notif.status == NotificationStatus.FAILED:
+                            status_key = "error"
+                            status_label = "Ошибка отправки"
+                        else:
+                            status_key = "unknown"
+                            status_label = "Статус неизвестен"
+
+                    # Явно задаём подписи типов, чтобы избежать переводов вроде
+                    # "Адрес электронной почты" в статусах.
+                    if nt == NotificationType.TELEGRAM:
+                        type_label = "Telegram"
+                    elif nt == NotificationType.EMAIL:
+                        type_label = "Email"
+                    elif nt == NotificationType.SMS:
+                        type_label = "SMS"
+                    else:
+                        type_label = NotificationType(nt).label
+
+                    user_item["statuses"].append(
+                        {
+                            "type": nt,
+                            "type_label": type_label,
+                            "status": status_key,
+                            "status_label": status_label,
+                        }
+                    )
+
+                send_statuses.append(user_item)
+
+            # Если по последней рассылке больше нет ни одного pending-статуса,
+            # очищаем данные о последнем запуске, чтобы при следующих обновлениях
+            # страница не показывала старые уведомления.
+            if not any_pending:
+                request.session.pop("last_notification_user_ids", None)
+                request.session.pop("last_notification_started_at", None)
+
+        return render(
+            request,
+            self.template_name,
+            {
+                "users": users_qs,
+                "send_statuses": send_statuses,
+            },
+        )
+
+    def post(self, request, *args, **kwargs):  # noqa
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        user_ids = request.POST.getlist("users")
+        message_text = request.POST.get("message", "").strip()
         if not user_ids or not message_text:
-            messages.error(request, 'Выберите хотя бы одного пользователя и введите сообщение.')
-            return redirect('home')
+            messages.error(
+                request, "Выберите хотя бы одного пользователя и введите сообщение."
+            )
+            return redirect("home")
 
-        # Создаем уведомления для выбранных пользователей
-        users = User.objects.filter(id__in=user_ids)
-        created = 0
-        for u in users:
+        users_qs = User.objects.filter(id__in=user_ids, is_staff=False).order_by(
+            "username"
+        )
+
+        ids_and_chats = [(u.pk, getattr(u, "telegram_chat_id", None)) for u in users_qs]
+        logger.info("[NotificationSendView] Selected users: %s", ids_and_chats)
+
+        # Запускаем асинхронную рассылку в отдельном потоке, чтобы не блокировать HTTP-запрос
+        def _run_batch_in_thread(user_ids_local: list[int], message: str) -> None:
+            import asyncio
+            import traceback
+
+            from django.contrib.auth import get_user_model as _get_user_model
+
+            UserModel = _get_user_model()
+            users_local = list(
+                UserModel.objects.filter(id__in=user_ids_local, is_staff=False)
+            )
+
+            async def send_for_user(u):
+                service = NotificationService(user=u)
+                try:
+                    return await service.send_notification(message=message)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "[NotificationSendView] Exception while sending for user id=%s: %s\n%s",
+                        getattr(u, "pk", None),
+                        exc,
+                        traceback.format_exc(),
+                    )
+                    return False
+
+            async def run_batch():
+                tasks = [send_for_user(u) for u in users_local]
+                return await asyncio.gather(*tasks, return_exceptions=True)
+
+            t_start_local = time.monotonic()
+            logger.info("[NotificationSendView] Background batch send start")
             try:
-                Notification.create_for_user(
-                    user=u,
-                    message=message_text,
-                    notification_type=getattr(u, 'notification_priority', 'telegram') or 'telegram'
-                )
-                created += 1
-            except Exception:
-                # Пропускаем ошибки по отдельным пользователям, продолжая обработку
-                continue
 
-        if created:
-            messages.success(request, f'Создано уведомлений: {created}.')
-        else:
-            messages.warning(request, 'Не удалось создать уведомления.')
-        return redirect('home')
+                async def _main_with_timeout():
+                    return await asyncio.wait_for(run_batch(), timeout=90)
+
+                results_local = asyncio.run(_main_with_timeout())
+                success_count_local = sum(1 for r in results_local if r is True)
+                logger.info(
+                    "[NotificationSendView] Background batch finished: success_count=%s, duration=%.3fs",
+                    success_count_local,
+                    time.monotonic() - t_start_local,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "[NotificationSendView] Background batch failed: %s\n%s",
+                    exc,
+                    traceback.format_exc(),
+                )
+
+        user_ids_int = [int(uid) for uid in user_ids]
+        # Сохраняем выбранных пользователей в сессию, чтобы показать статусы после redirect
+        request.session["last_notification_user_ids"] = user_ids_int
+        from django.utils import timezone
+
+        request.session["last_notification_started_at"] = timezone.now().isoformat()
+        threading.Thread(
+            target=_run_batch_in_thread,
+            args=(user_ids_int, message_text),
+            daemon=True,
+        ).start()
+        # Используем PRG: после запуска фоновой рассылки перенаправляем на GET,
+        # чтобы обновление страницы не вызывало повторный POST.
+        return redirect("home")
+
+
+class LastBatchStatusView(APIView):
+    """JSON-эндпоинт для получения статусов последней рассылки."""
+
+    def get(self, request, *args, **kwargs): # noqa
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        users_qs = User.objects.filter(is_staff=False).order_by("username")
+
+        last_ids = request.session.get("last_notification_user_ids")
+        started_at_iso = request.session.get("last_notification_started_at")
+
+        if not last_ids or not started_at_iso:
+            return Response({"statuses": [], "any_pending": False})
+
+        from django.utils.dateparse import parse_datetime
+
+        started_at = parse_datetime(started_at_iso)
+        if started_at is None:
+            started_at = None
+
+        selected_users = users_qs.filter(id__in=last_ids)
+
+        notification_types = [
+            NotificationType.TELEGRAM,
+            NotificationType.EMAIL,
+            NotificationType.SMS,
+        ]
+
+        send_statuses: list[dict] = []
+        any_pending = False
+
+        for user in selected_users:
+            user_item: dict = {
+                "user_id": user.pk,
+                "user_label": getattr(user, "username", str(user)),
+                "statuses": [],
+            }
+
+            for nt in notification_types:
+                qs = Notification.objects.filter(user=user, notification_type=nt)
+                if started_at is not None:
+                    qs = qs.filter(created_at__gte=started_at)
+                last_notif = qs.order_by("-created_at").first()
+
+                if not last_notif:
+                    status_key = "not_sent"
+                    status_label = "Не отправлялось"
+                else:
+                    if last_notif.status == NotificationStatus.PENDING:
+                        status_key = "pending"
+                        status_label = "В процессе"
+                        any_pending = True
+                    elif last_notif.status in (
+                        NotificationStatus.SENT,
+                        NotificationStatus.DELIVERED,
+                    ):
+                        status_key = "success"
+                        status_label = "Успешно отправлено"
+                    elif last_notif.status == NotificationStatus.FAILED:
+                        status_key = "error"
+                        status_label = "Ошибка отправки"
+                    else:
+                        status_key = "unknown"
+                        status_label = "Статус неизвестен"
+
+                if nt == NotificationType.TELEGRAM:
+                    type_label = "Telegram"
+                elif nt == NotificationType.EMAIL:
+                    type_label = "Email"
+                elif nt == NotificationType.SMS:
+                    type_label = "SMS"
+                else:
+                    type_label = NotificationType(nt).label
+
+                user_item["statuses"].append(
+                    {
+                        "type": nt,
+                        "type_label": type_label,
+                        "status": status_key,
+                        "status_label": status_label,
+                    }
+                )
+
+            send_statuses.append(user_item)
+
+        return Response({"statuses": send_statuses, "any_pending": any_pending})
+
 
 logger = logging.getLogger(__name__)
-from rest_framework.permissions import IsAuthenticated
-from .serializers import NotificationSerializer, SendNotificationSerializer
-from .services import NotificationService
+
 
 class NotificationViewSet(viewsets.ModelViewSet):
     """
     ViewSet для работы с уведомлениями.
     """
+
     serializer_class = NotificationSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         """Возвращает только уведомления текущего пользователя."""
         return Notification.objects.filter(user=self.request.user)
-    
-    @action(detail=False, methods=['post'])
-    def send(self, request, *args, **kwargs):
+
+    @action(detail=False, methods=["post"])
+    def send(self, request, *args, **kwargs):  # noqa
         """
         Отправляет уведомление пользователю через выбранные провайдеры.
-        
+
         Пример запроса:
         {
             "message": "Важное уведомление!",
@@ -172,98 +356,66 @@ class NotificationViewSet(viewsets.ModelViewSet):
         }
         """
         serializer = SendNotificationSerializer(
-            data=request.data,
-            context={'request': request}
+            data=request.data, context={"request": request}
         )
-        
+
         if not serializer.is_valid():
-            return Response(
-                serializer.errors,
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
         service = NotificationService(user=request.user)
-        
+
         # Вызываем асинхронную функцию синхронно с помощью asyncio
         import asyncio
         import traceback
-        
+
         async def send_async():
             return await service.send_notification(
-                message=serializer.validated_data['message'],
-                priority=serializer.validated_data['priority'],
-                **serializer.validated_data.get('provider_kwargs', {})
+                message=serializer.validated_data["message"],
+                priority=serializer.validated_data["priority"],
+                **serializer.validated_data.get("provider_kwargs", {}),
             )
-        
-        # Запускаем асинхронную функцию в цикле событий
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
+
         try:
-            success = loop.run_until_complete(send_async())
-            
+            success = asyncio.run(send_async())
+
             if success:
                 return Response(
                     {"status": "Уведомление успешно отправлено"},
-                    status=status.HTTP_200_OK
+                    status=status.HTTP_200_OK,
                 )
             else:
                 return Response(
                     {
                         "error": "Не удалось отправить уведомление ни одним из способов",
-                        "details": "Проверьте настройки провайдеров и получателей"
+                        "details": "Проверьте настройки провайдеров и получателей",
                     },
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
-                
+
         except asyncio.TimeoutError:
             logger.error("Превышено время ожидания при отправке уведомления")
             return Response(
                 {"error": "Превышено время ожидания при отправке уведомления"},
-                status=status.HTTP_504_GATEWAY_TIMEOUT
+                status=status.HTTP_504_GATEWAY_TIMEOUT,
             )
-            
+
         except Exception as e:
-            logger.error(f"Неожиданная ошибка при отправке уведомления: {str(e)}\n{traceback.format_exc()}")
-            return Response(
-                {
-                    "error": "Внутренняя ошибка сервера",
-                    "details": str(e)
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            logger.error(
+                f"Неожиданная ошибка при отправке уведомления: {str(e)}\n{traceback.format_exc()}"
             )
-            
-        finally:
-            try:
-                # Завершаем все асинхронные задачи
-                pending = asyncio.all_tasks(loop=loop)
-                for task in pending:
-                    task.cancel()
-                    try:
-                        loop.run_until_complete(task)
-                    except (asyncio.CancelledError, Exception):
-                        pass
-                
-                # Закрываем цикл событий
-                loop.run_until_complete(loop.shutdown_asyncgens())
-                loop.close()
-                
-            except Exception as e:
-                logger.error(f"Ошибка при завершении цикла событий: {str(e)}")
-            
-            # Убедимся, что цикл событий закрыт
-            if loop.is_running():
-                loop.stop()
-                loop.close()
-    
-    @action(detail=True, methods=['post'])
-    def mark_as_read(self, request, pk=None):
+            return Response(
+                {"error": "Внутренняя ошибка сервера", "details": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @action(detail=True, methods=["post"])
+    def mark_as_read(self, request, *args, **kwargs):  # noqa
         """Помечает уведомление как прочитанное."""
         notification = self.get_object()
-        notification.status = 'read'
+        notification.status = "read"
         notification.save()
-        
+
         return Response(
             {"status": "Уведомление помечено как прочитанное"},
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )

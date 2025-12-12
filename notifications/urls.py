@@ -10,4 +10,5 @@ router.register(r'notifications', views.NotificationViewSet, basename='notificat
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('last-batch-status/', views.LastBatchStatusView.as_view(), name='last-batch-status'),
 ]

@@ -19,14 +19,12 @@ class UserAdmin(BaseUserAdmin):
         'first_name',
         'phone_number',
         'notification_email',
-        'notification_priority',
         'is_active',
         'date_joined',
     )
     
     list_filter = (
         'is_active',
-        'notification_priority',
         'date_joined',
     )
     
@@ -50,7 +48,6 @@ class UserAdmin(BaseUserAdmin):
                 'notification_email',
                 'phone_number',
                 'telegram_chat_id',
-                'notification_priority',
             )
         }),
         (_('Permissions'), {
@@ -80,7 +77,6 @@ class UserAdmin(BaseUserAdmin):
                 'notification_email',
                 'phone_number',
                 'telegram_chat_id',
-                'notification_priority',
                 'password1',
                 'password2',
             ),

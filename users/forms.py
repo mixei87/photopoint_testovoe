@@ -1,4 +1,3 @@
-from django import forms
 from django.contrib.auth.forms import UserCreationForm
 
 from .models import User
@@ -14,7 +13,6 @@ class CustomUserCreationForm(UserCreationForm):
             'notification_email',
             'phone_number',
             'telegram_chat_id',
-            'notification_priority',
         )
 
     def __init__(self, *args, **kwargs):

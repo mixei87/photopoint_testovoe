@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <title>Сервис уведомлений</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #333;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+            margin-top: 0;
+        }
+
+        .status {
+            color: #4CAF50;
+            font-weight: 600;
+        }
+
+        .info {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e7f3fe;
+            border-left: 6px solid #2196F3;
+        }
+
+        .meta {
+            margin-top: 20px;
+            font-size: 0.9em;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Сервис уведомлений</h1>
+    <div class="status">Статус: <span style="color: green;">Работает</span></div>
+
+    <div class="info">
+        <h3>Доступные эндпоинты:</h3>
+        <ul>
+            <li><strong>Админ-панель:</strong> <a href="/admin">/admin</a></li>
+        </ul>
+    </div>
+
+    <div class="meta">
+        <p>Версия: 1.0.0</p>
+    </div>
+</div>
+</body>
+</html>

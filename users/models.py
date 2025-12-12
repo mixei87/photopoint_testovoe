@@ -74,20 +74,6 @@ class User(AbstractUser):
         help_text="ID чата в Telegram для уведомлений",
     )
 
-    # Приоритеты уведомлений
-    NOTIFICATION_PRIORITY = [
-        ("telegram", "Telegram"),
-        ("email", "Email"),
-        ("sms", "SMS"),
-    ]
-
-    notification_priority = models.CharField(
-        "Приоритет уведомлений",
-        max_length=10,
-        choices=NOTIFICATION_PRIORITY,
-        default="telegram",
-    )
-
     USERNAME_FIELD = "username"  # Используем username для входа
     REQUIRED_FIELDS = []  # Убираем обязательный email
 
